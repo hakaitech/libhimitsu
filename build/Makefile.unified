@@ -1,0 +1,479 @@
+# libhimitsu - Core Build System
+# Unified Makefile for all build targets and platforms
+# This serves as the foundation build system for all libhimitsu implementations
+
+# =============================================================================
+# PROJECT CONFIGURATION
+# =============================================================================
+PROJECT_NAME := libhimitsu
+VERSION := 2.0.0
+VERSION_MAJOR := $(word 1,$(subst ., ,$(VERSION)))
+API_VERSION := $(VERSION_MAJOR)
+
+# Build configuration
+BUILD_TYPE ?= release
+PREFIX ?= /usr/local
+DESTDIR ?=
+
+# =============================================================================
+# TOOLCHAIN CONFIGURATION
+# =============================================================================
+CC := gcc
+AR := ar
+RANLIB := ranlib
+STRIP := strip
+PKG_CONFIG := pkg-config
+
+# Compiler flags
+CFLAGS_BASE := -std=c99 -fPIC
+CFLAGS_WARNINGS := -Wall -Wextra -Wpedantic -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS_RELEASE := -O2 -DNDEBUG -fomit-frame-pointer
+CFLAGS_DEBUG := -g -O0 -DDEBUG -fsanitize=address -fsanitize=undefined
+CFLAGS_COVERAGE := --coverage -fprofile-arcs -ftest-coverage
+
+# Linker flags
+LDFLAGS_BASE := 
+LDFLAGS_SHARED := -shared -Wl,--as-needed
+LDFLAGS_DEBUG := -fsanitize=address -fsanitize=undefined
+LDFLAGS_COVERAGE := --coverage
+
+# Platform detection
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+ifeq ($(UNAME_S),Linux)
+    PLATFORM := linux
+    LDFLAGS_SHARED += -Wl,-soname,$(PROJECT_NAME).so.$(VERSION_MAJOR)
+    SHARED_EXT := so
+endif
+ifeq ($(UNAME_S),Darwin)
+    PLATFORM := macos
+    LDFLAGS_SHARED += -Wl,-install_name,@rpath/$(PROJECT_NAME).$(VERSION_MAJOR).dylib
+    SHARED_EXT := dylib
+endif
+ifeq ($(UNAME_S),FreeBSD)
+    PLATFORM := freebsd
+    SHARED_EXT := so
+endif
+
+# Architecture detection
+ifeq ($(UNAME_M),x86_64)
+    ARCH := x64
+endif
+ifeq ($(UNAME_M),aarch64)
+    ARCH := arm64
+endif
+ifeq ($(UNAME_M),armv7l)
+    ARCH := arm32
+endif
+
+# Build configuration selection
+ifeq ($(BUILD_TYPE),debug)
+    CFLAGS := $(CFLAGS_BASE) $(CFLAGS_WARNINGS) $(CFLAGS_DEBUG)
+    LDFLAGS := $(LDFLAGS_BASE) $(LDFLAGS_DEBUG)
+else ifeq ($(BUILD_TYPE),coverage)
+    CFLAGS := $(CFLAGS_BASE) $(CFLAGS_WARNINGS) $(CFLAGS_DEBUG) $(CFLAGS_COVERAGE)
+    LDFLAGS := $(LDFLAGS_BASE) $(LDFLAGS_COVERAGE)
+else
+    CFLAGS := $(CFLAGS_BASE) $(CFLAGS_WARNINGS) $(CFLAGS_RELEASE)
+    LDFLAGS := $(LDFLAGS_BASE)
+endif
+
+# =============================================================================
+# DIRECTORY STRUCTURE
+# =============================================================================
+SRCDIR := ../src
+INCDIR := ../include
+TESTDIR := ../tests
+EXAMPLEDIR := ../examples
+BUILDDIR := .
+DISTDIR := dist
+DOCDIR := ../docs
+
+# Create build directories
+BUILD_SUBDIRS := obj lib bin test examples dist
+$(shell mkdir -p $(BUILD_SUBDIRS))
+
+# =============================================================================
+# SOURCE FILES DISCOVERY
+# =============================================================================
+# Core library sources
+CORE_SOURCES := $(SRCDIR)/himitsu.c \
+                $(SRCDIR)/utils/error.c \
+                $(SRCDIR)/utils/memory.c
+
+# Cryptographic module sources
+CRYPTO_SOURCES := $(SRCDIR)/crypto/crypto.c \
+                  $(SRCDIR)/crypto/ecdh.c \
+                  $(SRCDIR)/crypto/sha256.c \
+                  $(SRCDIR)/crypto/aes_gcm.c
+
+# Protocol module sources
+PROTOCOL_SOURCES := $(SRCDIR)/protocol/protocol.c
+
+# Serialization module sources
+SERIALIZATION_SOURCES := $(SRCDIR)/serialization/serialization.c
+
+# All library sources
+LIB_SOURCES := $(CORE_SOURCES) $(CRYPTO_SOURCES) $(PROTOCOL_SOURCES) $(SERIALIZATION_SOURCES)
+
+# Object files
+LIB_OBJECTS := $(LIB_SOURCES:$(SRCDIR)/%.c=obj/%.o)
+LIB_DEPS := $(LIB_OBJECTS:.o=.d)
+
+# Test sources and objects
+TEST_SOURCES := $(wildcard $(TESTDIR)/unit/*.c) $(wildcard $(TESTDIR)/integration/*.c)
+TEST_OBJECTS := $(TEST_SOURCES:$(TESTDIR)/%.c=test/%.o)
+TEST_EXECUTABLES := $(TEST_SOURCES:$(TESTDIR)/%.c=bin/%)
+
+# Example sources and executables
+EXAMPLE_SOURCES := $(wildcard $(EXAMPLEDIR)/*.c)
+EXAMPLE_EXECUTABLES := $(EXAMPLE_SOURCES:$(EXAMPLEDIR)/%.c=bin/%)
+
+# =============================================================================
+# LIBRARY TARGETS
+# =============================================================================
+STATIC_LIB := lib/$(PROJECT_NAME).a
+SHARED_LIB := lib/$(PROJECT_NAME).$(SHARED_EXT).$(VERSION)
+SHARED_SONAME := lib/$(PROJECT_NAME).$(SHARED_EXT).$(VERSION_MAJOR)
+SHARED_LINK := lib/$(PROJECT_NAME).$(SHARED_EXT)
+
+# =============================================================================
+# BUILD RULES
+# =============================================================================
+.PHONY: all static shared debug coverage test examples install clean distclean help
+
+# Default target
+all: static shared
+
+# Library targets
+static: $(STATIC_LIB)
+shared: $(SHARED_LIB)
+
+# Build type targets
+debug:
+	$(MAKE) BUILD_TYPE=debug all
+
+coverage:
+	$(MAKE) BUILD_TYPE=coverage all
+
+# Static library
+$(STATIC_LIB): $(LIB_OBJECTS) | lib
+	@echo "  AR      $@"
+	@$(AR) rcs $@ $^
+	@$(RANLIB) $@
+	@echo "✓ Static library built: $(notdir $@)"
+
+# Shared library
+$(SHARED_LIB): $(LIB_OBJECTS) | lib
+	@echo "  LD      $@"
+	@$(CC) $(LDFLAGS_SHARED) $(LDFLAGS) -o $@ $^
+	@ln -sf $(notdir $(SHARED_LIB)) $(SHARED_SONAME)
+	@ln -sf $(notdir $(SHARED_LIB)) $(SHARED_LINK)
+	@echo "✓ Shared library built: $(notdir $@)"
+
+# Object files with dependency tracking
+obj/%.o: $(SRCDIR)/%.c | obj
+	@mkdir -p $(dir $@)
+	@echo "  CC      $@"
+	@$(CC) $(CFLAGS) -I$(INCDIR) -MMD -MP -c $< -o $@
+
+# =============================================================================
+# TEST SYSTEM
+# =============================================================================
+.PHONY: test test-unit test-integration test-coverage test-valgrind
+
+test: test-unit test-integration
+
+test-unit: $(filter bin/unit/%,$(TEST_EXECUTABLES))
+	@echo "Running unit tests..."
+	@for test in $(filter bin/unit/%,$(TEST_EXECUTABLES)); do \
+		echo "  Running $$test..."; \
+		$$test || exit 1; \
+	done
+	@echo "✓ All unit tests passed"
+
+test-integration: $(filter bin/integration/%,$(TEST_EXECUTABLES))
+	@echo "Running integration tests..."
+	@for test in $(filter bin/integration/%,$(TEST_EXECUTABLES)); do \
+		echo "  Running $$test..."; \
+		$$test || exit 1; \
+	done
+	@echo "✓ All integration tests passed"
+
+test-coverage: coverage
+	@$(MAKE) test
+	@echo "Generating coverage report..."
+	@gcov $(LIB_OBJECTS)
+	@lcov --capture --directory . --output-file coverage.info
+	@genhtml coverage.info --output-directory coverage-report
+	@echo "✓ Coverage report generated in coverage-report/"
+
+test-valgrind: $(TEST_EXECUTABLES)
+	@echo "Running tests with Valgrind..."
+	@for test in $(TEST_EXECUTABLES); do \
+		echo "  Valgrind $$test..."; \
+		valgrind --leak-check=full --error-exitcode=1 $$test || exit 1; \
+	done
+	@echo "✓ All tests passed Valgrind checks"
+
+# Test executables
+bin/unit/%: test/unit/%.o $(STATIC_LIB) | bin
+	@mkdir -p $(dir $@)
+	@echo "  LD      $@"
+	@$(CC) $(LDFLAGS) -o $@ $< -Llib -l$(PROJECT_NAME:lib%=%) -I$(INCDIR)
+
+bin/integration/%: test/integration/%.o $(STATIC_LIB) | bin
+	@mkdir -p $(dir $@)
+	@echo "  LD      $@"
+	@$(CC) $(LDFLAGS) -o $@ $< -Llib -l$(PROJECT_NAME:lib%=%) -I$(INCDIR)
+
+test/%.o: $(TESTDIR)/%.c | test
+	@mkdir -p $(dir $@)
+	@echo "  CC      $@"
+	@$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
+
+# =============================================================================
+# EXAMPLES
+# =============================================================================
+.PHONY: examples
+
+examples: $(EXAMPLE_EXECUTABLES)
+
+bin/%: examples/%.o $(STATIC_LIB) | bin
+	@echo "  LD      $@"
+	@$(CC) $(LDFLAGS) -o $@ $< -Llib -l$(PROJECT_NAME:lib%=%) -I$(INCDIR)
+
+examples/%.o: $(EXAMPLEDIR)/%.c | examples
+	@mkdir -p $(dir $@)
+	@echo "  CC      $@"
+	@$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
+
+# =============================================================================
+# INSTALLATION
+# =============================================================================
+.PHONY: install install-static install-shared install-headers uninstall
+
+install: install-static install-shared install-headers
+
+install-static: $(STATIC_LIB)
+	@echo "Installing static library..."
+	@install -d $(DESTDIR)$(PREFIX)/lib
+	@install -m 644 $(STATIC_LIB) $(DESTDIR)$(PREFIX)/lib/
+
+install-shared: $(SHARED_LIB)
+	@echo "Installing shared library..."
+	@install -d $(DESTDIR)$(PREFIX)/lib
+	@install -m 755 $(SHARED_LIB) $(DESTDIR)$(PREFIX)/lib/
+	@ln -sf $(notdir $(SHARED_LIB)) $(DESTDIR)$(PREFIX)/lib/$(notdir $(SHARED_SONAME))
+	@ln -sf $(notdir $(SHARED_LIB)) $(DESTDIR)$(PREFIX)/lib/$(notdir $(SHARED_LINK))
+	@ldconfig 2>/dev/null || true
+
+install-headers:
+	@echo "Installing headers..."
+	@install -d $(DESTDIR)$(PREFIX)/include/himitsu
+	@install -m 644 $(INCDIR)/himitsu/*.h $(DESTDIR)$(PREFIX)/include/himitsu/
+
+uninstall:
+	@echo "Uninstalling libhimitsu..."
+	@rm -f $(DESTDIR)$(PREFIX)/lib/$(notdir $(STATIC_LIB))
+	@rm -f $(DESTDIR)$(PREFIX)/lib/$(notdir $(SHARED_LIB))
+	@rm -f $(DESTDIR)$(PREFIX)/lib/$(notdir $(SHARED_SONAME))
+	@rm -f $(DESTDIR)$(PREFIX)/lib/$(notdir $(SHARED_LINK))
+	@rm -rf $(DESTDIR)$(PREFIX)/include/himitsu
+
+# =============================================================================
+# PACKAGING AND DISTRIBUTION
+# =============================================================================
+.PHONY: dist dist-source dist-binary package-deb package-rpm
+
+TARBALL := $(DISTDIR)/$(PROJECT_NAME)-$(VERSION).tar.gz
+BINARY_TARBALL := $(DISTDIR)/$(PROJECT_NAME)-$(VERSION)-$(PLATFORM)-$(ARCH).tar.gz
+
+dist: dist-source
+
+dist-source: | dist
+	@echo "Creating source distribution..."
+	@git archive --prefix=$(PROJECT_NAME)-$(VERSION)/ --format=tar.gz HEAD > $(TARBALL)
+	@echo "✓ Source tarball: $(TARBALL)"
+
+dist-binary: all | dist
+	@echo "Creating binary distribution..."
+	@mkdir -p $(DISTDIR)/tmp/$(PROJECT_NAME)-$(VERSION)
+	@cp -r lib $(DISTDIR)/tmp/$(PROJECT_NAME)-$(VERSION)/
+	@cp -r $(INCDIR) $(DISTDIR)/tmp/$(PROJECT_NAME)-$(VERSION)/
+	@tar -czf $(BINARY_TARBALL) -C $(DISTDIR)/tmp $(PROJECT_NAME)-$(VERSION)
+	@rm -rf $(DISTDIR)/tmp
+	@echo "✓ Binary tarball: $(BINARY_TARBALL)"
+
+# =============================================================================
+# CODE QUALITY
+# =============================================================================
+.PHONY: format analyze scan security-scan
+
+format:
+	@echo "Formatting code..."
+	@find $(SRCDIR) $(INCDIR) $(TESTDIR) $(EXAMPLEDIR) -name "*.c" -o -name "*.h" | \
+		xargs clang-format -i -style=file
+	@echo "✓ Code formatted"
+
+analyze:
+	@echo "Running static analysis..."
+	@cppcheck --enable=all --std=c99 --suppress=missingIncludeSystem \
+		--template='{file}:{line}: {severity}: {message}' $(SRCDIR)
+	@echo "✓ Static analysis complete"
+
+scan:
+	@echo "Running PVS-Studio scan..."
+	@pvs-studio-analyzer trace -- make clean all
+	@pvs-studio-analyzer analyze --output-file pvsreport.log
+	@plog-converter -t text pvsreport.log
+	@echo "✓ PVS-Studio scan complete"
+
+security-scan:
+	@echo "Running security scan..."
+	@bandit -r $(SRCDIR) -f json -o security-report.json || true
+	@echo "✓ Security scan complete"
+
+# =============================================================================
+# BENCHMARKING
+# =============================================================================
+.PHONY: benchmark benchmark-crypto benchmark-protocol
+
+benchmark: benchmark-crypto benchmark-protocol
+
+benchmark-crypto: bin/benchmark_crypto
+	@echo "Running crypto benchmarks..."
+	@./bin/benchmark_crypto
+
+benchmark-protocol: bin/benchmark_protocol
+	@echo "Running protocol benchmarks..."
+	@./bin/benchmark_protocol
+
+# =============================================================================
+# CROSS-COMPILATION TARGETS
+# =============================================================================
+.PHONY: cross-compile-arm64 cross-compile-arm32 cross-compile-windows
+
+cross-compile-arm64:
+	$(MAKE) CC=aarch64-linux-gnu-gcc ARCH=arm64 all
+
+cross-compile-arm32:
+	$(MAKE) CC=arm-linux-gnueabihf-gcc ARCH=arm32 all
+
+cross-compile-windows:
+	$(MAKE) CC=x86_64-w64-mingw32-gcc SHARED_EXT=dll all
+
+# =============================================================================
+# EMBEDDED TARGETS
+# =============================================================================
+.PHONY: embedded-check esp32 arduino
+
+embedded-check:
+	@echo "Checking embedded compatibility..."
+	@$(CC) $(CFLAGS) -DHIMITSU_EMBEDDED -S $(LIB_SOURCES) -I$(INCDIR)
+	@echo "✓ Embedded compatibility check passed"
+
+esp32:
+	@echo "Building for ESP32..."
+	@if [ -z "$$IDF_PATH" ]; then \
+		echo "Error: ESP-IDF not found. Please set IDF_PATH environment variable."; \
+		exit 1; \
+	fi
+	@echo "ESP32 build requires integration with ESP-IDF build system"
+
+# =============================================================================
+# MAINTENANCE
+# =============================================================================
+.PHONY: clean distclean mrproper update-version
+
+clean:
+	@echo "Cleaning build artifacts..."
+	@rm -rf obj lib bin test examples coverage-report *.gcov *.gcda *.gcno coverage.info
+	@echo "✓ Build artifacts cleaned"
+
+distclean: clean
+	@echo "Deep cleaning..."
+	@rm -rf $(DISTDIR) *.log security-report.json pvsreport.log
+	@echo "✓ Deep clean complete"
+
+mrproper: distclean
+	@echo "Complete cleanup..."
+	@git clean -fdx
+	@echo "✓ Repository reset to clean state"
+
+update-version:
+	@echo "Current version: $(VERSION)"
+	@echo "Update VERSION variable in this Makefile to change version"
+
+# =============================================================================
+# HELP AND INFO
+# =============================================================================
+.PHONY: help info
+
+help:
+	@echo "libhimitsu Build System"
+	@echo "======================"
+	@echo ""
+	@echo "Basic Targets:"
+	@echo "  all          - Build static and shared libraries (default)"
+	@echo "  static       - Build static library only"
+	@echo "  shared       - Build shared library only"
+	@echo "  debug        - Build debug version with sanitizers"
+	@echo "  coverage     - Build with coverage instrumentation"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test         - Run all tests"
+	@echo "  test-unit    - Run unit tests only"
+	@echo "  test-integration - Run integration tests only"
+	@echo "  test-coverage - Generate coverage report"
+	@echo "  test-valgrind - Run tests with Valgrind"
+	@echo ""
+	@echo "Development:"
+	@echo "  examples     - Build example programs"
+	@echo "  format       - Format source code"
+	@echo "  analyze      - Run static analysis"
+	@echo "  benchmark    - Run performance benchmarks"
+	@echo ""
+	@echo "Installation:"
+	@echo "  install      - Install library and headers"
+	@echo "  uninstall    - Remove installed files"
+	@echo ""
+	@echo "Distribution:"
+	@echo "  dist-source  - Create source tarball"
+	@echo "  dist-binary  - Create binary tarball"
+	@echo ""
+	@echo "Cross-compilation:"
+	@echo "  cross-compile-arm64   - Cross-compile for ARM64"
+	@echo "  cross-compile-arm32   - Cross-compile for ARM32"
+	@echo "  cross-compile-windows - Cross-compile for Windows"
+	@echo ""
+	@echo "Maintenance:"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  distclean    - Deep clean"
+	@echo "  info         - Show build configuration"
+	@echo "  help         - Show this help"
+
+info:
+	@echo "Build Configuration:"
+	@echo "  Project:     $(PROJECT_NAME) v$(VERSION)"
+	@echo "  Platform:    $(PLATFORM)"
+	@echo "  Architecture: $(ARCH)"
+	@echo "  Build Type:  $(BUILD_TYPE)"
+	@echo "  Compiler:    $(CC)"
+	@echo "  C Flags:     $(CFLAGS)"
+	@echo "  LD Flags:    $(LDFLAGS)"
+	@echo "  Install:     $(PREFIX)"
+
+# =============================================================================
+# DEPENDENCY TRACKING
+# =============================================================================
+# Include dependency files
+-include $(LIB_DEPS)
+
+# Create build directories
+obj lib bin test examples dist:
+	@mkdir -p $@
+
+# Prevent make from removing intermediate files
+.SECONDARY: $(LIB_OBJECTS) $(TEST_OBJECTS)

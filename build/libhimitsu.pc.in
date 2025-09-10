@@ -1,0 +1,13 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: libhimitsu
+Description: Himitsu Protocol Core Library - Secure node-to-node communication
+Version: @PROJECT_VERSION@
+URL: https://github.com/hakaitech/libhimitsu
+
+Cflags: -I${includedir}
+Libs: -L${libdir} -lhimitsu
+Libs.private: -lm

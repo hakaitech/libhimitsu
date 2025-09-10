@@ -1,0 +1,47 @@
+@PACKAGE_INIT@
+
+# libhimitsu CMake configuration file
+
+include(CMakeFindDependencyMacro)
+
+# Check if components are specified
+set(_supported_components static shared)
+
+foreach(_comp ${libhimitsu_FIND_COMPONENTS})
+    if(NOT _comp IN_LIST _supported_components)
+        set(libhimitsu_FOUND False)
+        set(libhimitsu_NOT_FOUND_MESSAGE "Unsupported component: ${_comp}")
+        return()
+    endif()
+endforeach()
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/libhimitsu-targets.cmake")
+
+# Set variables for compatibility
+set(LIBHIMITSU_FOUND TRUE)
+set(LIBHIMITSU_VERSION @PROJECT_VERSION@)
+set(LIBHIMITSU_INCLUDE_DIRS "@CMAKE_INSTALL_FULL_INCLUDEDIR@")
+set(LIBHIMITSU_LIBRARIES "")
+
+# Add appropriate libraries based on components
+if("shared" IN_LIST libhimitsu_FIND_COMPONENTS OR NOT libhimitsu_FIND_COMPONENTS)
+    if(TARGET libhimitsu::shared)
+        list(APPEND LIBHIMITSU_LIBRARIES libhimitsu::shared)
+    endif()
+endif()
+
+if("static" IN_LIST libhimitsu_FIND_COMPONENTS OR NOT libhimitsu_FIND_COMPONENTS)
+    if(TARGET libhimitsu::static)
+        list(APPEND LIBHIMITSU_LIBRARIES libhimitsu::static)
+    endif()
+endif()
+
+# If no specific component requested, provide the default
+if(NOT libhimitsu_FIND_COMPONENTS)
+    if(TARGET libhimitsu::himitsu)
+        set(LIBHIMITSU_LIBRARIES libhimitsu::himitsu)
+    endif()
+endif()
+
+check_required_components(libhimitsu)
